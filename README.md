@@ -16,7 +16,8 @@ The script decrypts string constants by utilizing .NET Reflection which means th
 * [dnlib](https://github.com/0xd4d/dnlib)
     ```
     the script tested with a dnlib library compiled from source with .NET Framework 4.5 
-    but should work as expected with other versions as well
+    but should work as expected with other versions as well. 
+    The de4dot-cex tool includes a precompiled version of the dnlib if needed.
     ```
 * at least one obfuscated .NET target binary with packing and anti-tamper protection removed
 ## Usage
