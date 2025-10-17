@@ -2,15 +2,16 @@ def _initializer() -> None:
     import argparse
     parser = argparse.ArgumentParser()
     target_group = parser.add_mutually_exclusive_group(required=True)
-    target_group.add_argument('-d', '--dir', type=str, help="Specify target directory where obfuscated files are located")
-    target_group.add_argument('-f', '--file', type=str, help="Specify a single obfuscated target file")
-    parser.add_argument('-e', '--extension', type=str, required=False, help="Use together with the --dir option to filter out target files by extension")
-    parser.add_argument('-o', '--output', type=str, required=False, help="Output directory for deobfuscated files")
-    parser.add_argument('-l', '--dnlibpath', type=str, required=True, help="Specify where precompiled dnlib dependency is located")
-    parser.add_argument('-s', '--powershellpath', type=str, required=False, help="Optional powershell path argument")
+    target_group.add_argument('-d', '--dir', type=str, help='Specify target directory where obfuscated files are located')
+    target_group.add_argument('-f', '--file', type=str, help='Specify a single obfuscated target file')
+    parser.add_argument('-e', '--extension', type=str, required=False, help='Use together with the --dir option to filter out target files by extension')
+    parser.add_argument('-o', '--output', type=str, required=False, help='Output directory for deobfuscated files')
+    parser.add_argument('-l', '--dnlibpath', type=str, required=True, help='Specify where precompiled dnlib dependency is located')
+    parser.add_argument('-s', '--powershellpath', type=str, required=False, help='Optional powershell path argument. Used instead of dnlib for reflection')
+    parser.add_argument('-p', '--use-powershell', action='store_true', help='A flag to toggle usage of powershell instead of dnlib for reflection')
     verbosity_group = parser.add_mutually_exclusive_group(required=False)
-    verbosity_group.add_argument('-q', '--quite', action='store_true', help="A flag to toggle quite mode")
-    verbosity_group.add_argument('-v', '--verbose', action='store_true', help="A flag to toggle verbose mode")
+    verbosity_group.add_argument('-q', '--quite', action='store_true', help='A flag to toggle quite mode')
+    verbosity_group.add_argument('-v', '--verbose', action='store_true', help='A flag to toggle verbose mode')
     global args
     args = parser.parse_args()
 
@@ -23,8 +24,7 @@ import clr
 clr.AddReference(args.dnlibpath)
 from dnlib.DotNet import *
 from dnlib.DotNet.Emit import OpCodes, Instruction
-from os import remove as remove_file
-import dnlib
+import System
 import subprocess
 import os
 import logging
@@ -47,10 +47,7 @@ def patch_string(instructions, index, decrypted_str, *str_instructions) -> int:
     return nop_range
 
 
-def decrypt_i4(value, mdtoken, target) -> str:
-    powershellpath = 'powershell.exe'
-    if args.powershellpath is not None:
-        powershellpath = args.powershellpath
+def decrypt_i4_powershell(value, mdtoken, target, powershellpath) -> str:
     loadfile = f' -Command "[Reflection.Assembly]::LoadFile(\'{target}\')'
     resolve_method = f'.ManifestModule.ResolveMethod({mdtoken})'
     invoke_method = f'.MakeGenericMethod([string]).Invoke($null, @({value}))"'
@@ -65,13 +62,29 @@ def decrypt_i4(value, mdtoken, target) -> str:
         logging.error(f'Failed to decode a string. {e}')
 
 
+def decrypt_i4(value, mdtoken, target) -> str:
+    global args
+    if args.powershellpath is not None:
+        return decrypt_i4_powershell(value, mdtoken, target, args.powershellpath)
+    elif args.use_powershell:
+        return decrypt_i4_powershell(value, mdtoken, target, 'powershell.exe')
+    
+    assembly = System.Reflection.Assembly.LoadFile(target)
+    module = assembly.ManifestModule
+    method = module.ResolveMethod(int(mdtoken, 16))
+    generic_method = method.MakeGenericMethod(System.Type.GetType("System.String"))
+    method_args = System.Array[System.Object]([System.Int32(int(value))])
+    decrypted_str = generic_method.Invoke(None, method_args)
+    return decrypted_str
+
+
 def get_mdtoken_from_method(method_name, method_to_mdtoken) -> str:
     for method in method_to_mdtoken:
         if method_name in method:
             return method_to_mdtoken[method]
 
 
-def decrypt_strings(instructions, method_to_mdtoken, target) -> None:
+def decrypt_strings(instructions, method_to_mdtoken, target) -> None:    
     i = 0
     while i < len(instructions)-3:
         instruction1 = instructions[i]
@@ -195,9 +208,9 @@ def main() -> None:
     if args.file is not None:
         files = [args.file]
     elif args.dir is not None and args.extension is not None:
-        files = glob.glob(f"{args.dir}\*{args.extension}")
+        files = glob.glob(f"{args.dir}\\*{args.extension}")
     elif args.dir is not None:
-        files = glob.glob(f"{args.dir}\*")
+        files = glob.glob(f"{args.dir}\\*")
     for target in files:
         logging.info(f'Processing {target}')
         noanticall_dll_path = process_target_module_anticall(target, args.output)
